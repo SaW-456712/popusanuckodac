@@ -6,11 +6,13 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, FSInputFile
 from dotenv import load_dotenv
 
+# Включаем логирование ошибок в консоль хостинга
 logging.basicConfig(level=logging.INFO)
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
+    logging.error("КРИТИЧЕСКАЯ ОШИБКА: BOT_TOKEN не найден в переменных окружения!")
     exit()
 
 bot = Bot(token=BOT_TOKEN)
@@ -21,6 +23,7 @@ os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 
 async def fetch_mp3_via_web(sc_url: str) -> tuple[str, str] | tuple[None, None]:
+    # Используем альтернативный стабильный шлюз загрузчика
     api_url = f"https://api.soundclouddownloader.org/download?url={sc_url}"
     async with aiohttp.ClientSession() as session:
         try:
@@ -30,8 +33,14 @@ async def fetch_mp3_via_web(sc_url: str) -> tuple[str, str] | tuple[None, None]:
                     if data.get("success") and "url" in data:
                         title = data.get("title", "track").replace("/", "_")
                         return f"{title}.mp3", data["url"]
-        except Exception:
-            pass
+                    else:
+                        logging.warning(
+                            f"API ответило, но ссылки нет: {data}"
+                        )
+                else:
+                    logging.warning(f"Плохой статус ответа API: {response.status}")
+        except Exception as e:
+            logging.error(f"Ошибка при запросе к Веб-API: {e}")
     return None, None
 
 
@@ -43,8 +52,8 @@ async def download_file(url: str, dest_path: str) -> bool:
                     with open(dest_path, "wb") as f:
                         f.write(await response.read())
                     return True
-        except Exception:
-            pass
+        except Exception as e:
+            logging.error(f"Ошибка при сохранении файла: {e}")
     return False
 
 
@@ -63,14 +72,15 @@ async def handle_soundcloud_link(message: Message):
         try:
             audio_file = FSInputFile(file_path)
             await message.answer_audio(audio=audio_file)
-        except Exception:
-            pass
+        except Exception as e:
+            logging.error(f"Ошибка отправки аудио в Телеграм: {e}")
         finally:
             if os.path.exists(file_path):
                 os.remove(file_path)
 
 
 async def main():
+    logging.info("Бот успешно запущен и слушает сервер...")
     await dp.start_polling(bot)
 
 
