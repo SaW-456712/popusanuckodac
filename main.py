@@ -1,18 +1,17 @@
 import os
 import asyncio
 import logging
-import aiohttp
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, FSInputFile
 from dotenv import load_dotenv
+from yt_dlp import YoutubeDL
 
-# Включаем логирование ошибок в консоль хостинга
 logging.basicConfig(level=logging.INFO)
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
-    logging.error("КРИТИЧЕСКАЯ ОШИБКА: BOT_TOKEN не найден в переменных окружения!")
+    logging.error("КРИТИЧЕСКАЯ ОШИБКА: BOT_TOKEN не найден!")
     exit()
 
 bot = Bot(token=BOT_TOKEN)
@@ -22,53 +21,38 @@ DOWNLOAD_DIR = "downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 
-async def fetch_mp3_via_web(sc_url: str) -> tuple[str, str] | tuple[None, None]:
-    # Используем альтернативный стабильный шлюз загрузчика
-    api_url = f"https://api.soundclouddownloader.org/download?url={sc_url}"
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.get(api_url, timeout=15) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    if data.get("success") and "url" in data:
-                        title = data.get("title", "track").replace("/", "_")
-                        return f"{title}.mp3", data["url"]
-                    else:
-                        logging.warning(
-                            f"API ответило, но ссылки нет: {data}"
-                        )
-                else:
-                    logging.warning(f"Плохой статус ответа API: {response.status}")
-        except Exception as e:
-            logging.error(f"Ошибка при запросе к Веб-API: {e}")
-    return None, None
+def download_soundcloud_audio(url: str) -> str | None:
+    ydl_opts = {
+        "format": "bestaudio/best",
+        "outtmpl": f"{DOWNLOAD_DIR}/%(title)s.%(ext)s",
+        "postprocessors": [
+            {
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "mp3",
+                "preferredquality": "192",
+            }
+        ],
+        "quiet": True,
+    }
 
-
-async def download_file(url: str, dest_path: str) -> bool:
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.get(url, timeout=30) as response:
-                if response.status == 200:
-                    with open(dest_path, "wb") as f:
-                        f.write(await response.read())
-                    return True
-        except Exception as e:
-            logging.error(f"Ошибка при сохранении файла: {e}")
-    return False
+    try:
+        with YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            filename = ydl.prepare_filename(info)
+            return os.path.splitext(filename)[0] + ".mp3"
+    except Exception as e:
+        logging.error(f"Ошибка yt-dlp при скачивании: {e}")
+        return None
 
 
 @dp.message(F.text.contains("soundcloud.com"))
 async def handle_soundcloud_link(message: Message):
     url = message.text.strip()
 
-    filename, mp3_url = await fetch_mp3_via_web(url)
-    if not mp3_url:
-        return
+    loop = asyncio.get_event_loop()
+    file_path = await loop.run_in_executor(None, download_soundcloud_audio, url)
 
-    file_path = os.path.join(DOWNLOAD_DIR, filename)
-    success = await download_file(mp3_url, file_path)
-
-    if success and os.path.exists(file_path):
+    if file_path and os.path.exists(file_path):
         try:
             audio_file = FSInputFile(file_path)
             await message.answer_audio(audio=audio_file)
@@ -80,7 +64,7 @@ async def handle_soundcloud_link(message: Message):
 
 
 async def main():
-    logging.info("Бот успешно запущен и слушает сервер...")
+    logging.info("Бот запущен через yt-dlp...")
     await dp.start_polling(bot)
 
 
